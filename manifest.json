@@ -1,0 +1,60 @@
+{
+  "manifest_version": 3,
+  "name": "Mysterium VPN for Firefox",
+  "short_name": "Mysterium VPN",
+  "description": "Mysterium VPN: Secure VPN for safer surfing",
+  "author": "info@mntechnologijos.lt",
+  "version": "0.2.0",
+  "icons": {
+    "16": "icons/default-16.png",
+    "48": "icons/default-48.png",
+    "128": "icons/default-128.png"
+  },
+  "background": {
+    "scripts": [
+      "firefox-polyfill.js",
+      "background.js"
+    ]
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content_script.js"
+      ]
+    }
+  ],
+  "action": {
+    "default_popup": "index.html",
+    "default_icon": {
+      "16": "icons/default-16.png",
+      "48": "icons/default-48.png",
+      "128": "icons/default-128.png"
+    }
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';"
+  },
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "permissions": [
+    "storage",
+    "proxy",
+    "webRequest",
+    "webRequestAuthProvider"
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "mysterium-vpn@mysterium.network",
+      "strict_min_version": "142.0",
+      "data_collection_permissions": {
+        "required": [
+          "none"
+        ]
+      }
+    }
+  }
+}

@@ -30193,7 +30193,7 @@ _.c=c
 _.d=d
 _.e=e
 _.f=f},
-bhP(a){if(a.uf("chrome-extension"))return a.geN()+"://"+a.gm1(a)
+bhP(a){if(a.uf("chrome-extension")||a.uf("moz-extension"))return a.geN()+"://"+a.gm1(a)
 return a.gyA(a)},
 aqq:function aqq(a){this.b=a},
 aqr:function aqr(){},

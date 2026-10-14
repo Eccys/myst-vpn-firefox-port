@@ -60,7 +60,7 @@
     return;
   }
 
-  // 1. Ensure chrome.runtime and chrome.runtime.id exist
+  // 1. Ensure chrome.runtime, chrome.runtime.id, chrome.action, and chrome.webRequest exist
   if (!global.chrome.runtime) {
     safeDefine(global.chrome, "runtime", (nativeBrowser && nativeBrowser.runtime) || {});
   }
@@ -69,6 +69,12 @@
       (nativeBrowser && nativeBrowser.runtime && nativeBrowser.runtime.id) ||
       "mysterium-vpn@mysterium.network";
     safeDefine(global.chrome.runtime, "id", fallbackId);
+  }
+  if (!global.chrome.action && nativeBrowser && nativeBrowser.action) {
+    safeDefine(global.chrome, "action", nativeBrowser.action);
+  }
+  if (!global.chrome.webRequest && nativeBrowser && nativeBrowser.webRequest) {
+    safeDefine(global.chrome, "webRequest", nativeBrowser.webRequest);
   }
 
   // 2. Ensure chrome.storage.local methods always return Promises AND support callbacks

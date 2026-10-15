@@ -177,16 +177,40 @@
 
   function parseHostAndPort(rawHost, rawPort, scheme) {
     let host = String(rawHost || "").trim();
-    let port = rawPort != null && rawPort !== "" ? Number(rawPort) : null;
-    if (host.includes(":")) {
-      const idx = host.lastIndexOf(":");
-      const maybePort = Number(host.slice(idx + 1));
-      if (Number.isInteger(maybePort) && maybePort > 0) {
-        if (!port) port = maybePort;
-        host = host.slice(0, idx);
+    host = host.replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//, "").replace(/\/.*$/, "");
+
+    const parsedRawPort = rawPort != null && rawPort !== "" ? Number(rawPort) : null;
+    let port =
+      Number.isInteger(parsedRawPort) && parsedRawPort >= 1 && parsedRawPort <= 65535
+        ? parsedRawPort
+        : null;
+
+    if (host.startsWith("[")) {
+      const closeIdx = host.indexOf("]");
+      if (closeIdx !== -1) {
+        const ipv6Host = host.slice(1, closeIdx);
+        const rest = host.slice(closeIdx + 1);
+        if (rest.startsWith(":")) {
+          const maybePort = Number(rest.slice(1));
+          if (!port && Number.isInteger(maybePort) && maybePort >= 1 && maybePort <= 65535) {
+            port = maybePort;
+          }
+        }
+        host = ipv6Host;
+      }
+    } else {
+      const firstColon = host.indexOf(":");
+      const lastColon = host.lastIndexOf(":");
+      if (firstColon !== -1 && firstColon === lastColon) {
+        const maybePort = Number(host.slice(lastColon + 1));
+        if (Number.isInteger(maybePort) && maybePort >= 1 && maybePort <= 65535) {
+          if (!port) port = maybePort;
+        }
+        host = host.slice(0, lastColon);
       }
     }
-    if (!port || !Number.isFinite(port)) {
+
+    if (!port) {
       port = scheme === "https" ? 443 : scheme && scheme.startsWith("socks") ? 1080 : 80;
     }
     return { host, port };
@@ -205,7 +229,8 @@
       if (singleProxy && singleProxy.host) {
         const scheme = String(singleProxy.scheme || "https").toLowerCase();
         const { host, port } = parseHostAndPort(singleProxy.host, singleProxy.port, scheme);
-        const hostPort = `${host}:${port}`;
+        const formattedHost = host.includes(":") ? `[${host}]` : host;
+        const hostPort = `${formattedHost}:${port}`;
 
         if (scheme === "https" || scheme === "http") {
           firefoxValue.http = hostPort;

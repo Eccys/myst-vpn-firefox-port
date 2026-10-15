@@ -33,32 +33,69 @@ function readProxyConfigFromJson(json) {
     }
 }
 
-function parseProxyHostAndPort(rawHost) {
+function parseProxyHostAndPort(rawHost, defaultPort = 443) {
     let host = String(rawHost || "").trim();
-    let port = 443;
-    if (host.includes(":")) {
-        const idx = host.lastIndexOf(":");
-        const parsedPort = Number(host.slice(idx + 1));
-        if (Number.isInteger(parsedPort) && parsedPort > 0) {
+    let port = defaultPort;
+    if (!host) {
+        return { host: "", port };
+    }
+
+    // Strip leading scheme if present (e.g. "https://proxy.example.com:8443/path")
+    host = host.replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//, "").replace(/\/.*$/, "");
+
+    if (host.startsWith("[")) {
+        const closeIdx = host.indexOf("]");
+        if (closeIdx !== -1) {
+            const ipv6Host = host.slice(1, closeIdx);
+            const rest = host.slice(closeIdx + 1);
+            if (rest.startsWith(":")) {
+                const parsedPort = Number(rest.slice(1));
+                if (Number.isInteger(parsedPort) && parsedPort >= 1 && parsedPort <= 65535) {
+                    port = parsedPort;
+                }
+            }
+            return { host: ipv6Host, port };
+        }
+    }
+
+    const firstColon = host.indexOf(":");
+    const lastColon = host.lastIndexOf(":");
+    if (firstColon !== -1 && firstColon === lastColon) {
+        // Single colon: host:port
+        const parsedPort = Number(host.slice(lastColon + 1));
+        if (Number.isInteger(parsedPort) && parsedPort >= 1 && parsedPort <= 65535) {
             port = parsedPort;
         }
-        host = host.slice(0, idx);
+        host = host.slice(0, lastColon);
     }
+
     return { host, port };
 }
 
 let isProxyControlled = false;
 
-function shouldBypassProxy(rawHostname) {
-    const hostname = String(rawHostname || "").trim().toLowerCase().replace(/^\[|\]$/g, "");
+function isValidIpv4Octets(parts) {
+    return parts.length === 4 && parts.every((p) => /^\d{1,3}$/.test(p) && Number(p) >= 0 && Number(p) <= 255);
+}
+
+function shouldBypassProxy(rawHostname, activeProxyHost) {
+    const hostname = String(rawHostname || "").trim().toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
     if (!hostname) return true;
+    if (activeProxyHost && hostname === String(activeProxyHost).trim().toLowerCase().replace(/^\[|\]$/g, "")) {
+        return true;
+    }
     if (
         hostname === "localhost" ||
         hostname.endsWith(".localhost") ||
         hostname === "localhost.localdomain" ||
         hostname.endsWith(".localhost.localdomain") ||
         hostname.endsWith(".local") ||
+        hostname === "0.0.0.0" ||
         hostname === "::1" ||
+        hostname === "0:0:0:0:0:0:0:1" ||
+        hostname.startsWith("fe80:") ||
+        hostname.startsWith("fc00:") ||
+        hostname.startsWith("fd00:") ||
         hostname === "mysteriumvpn.com" ||
         hostname.endsWith(".mysteriumvpn.com") ||
         hostname === "mysterium.network" ||
@@ -66,27 +103,42 @@ function shouldBypassProxy(rawHostname) {
     ) {
         return true;
     }
-    if (
-        /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname) ||
-        /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname) ||
-        /^192\.168\.\d{1,3}\.\d{1,3}$/.test(hostname) ||
-        /^172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}$/.test(hostname)
-    ) {
-        return true;
+
+    const ipv4Parts = hostname.split(".");
+    if (isValidIpv4Octets(ipv4Parts)) {
+        const [a, b] = ipv4Parts.map(Number);
+        if (
+            a === 0 ||
+            a === 127 ||
+            a === 10 ||
+            (a === 192 && b === 168) ||
+            (a === 169 && b === 254) ||
+            (a === 172 && b >= 16 && b <= 31)
+        ) {
+            return true;
+        }
     }
     return false;
 }
 
-chrome.storage.local.get([KEY_PROXY_CONFIG]).then((result) => {
-    const rawVal = result && result[KEY_PROXY_CONFIG];
-    proxyConfig = readProxyConfigFromJson(rawVal ? String(rawVal) : null);
-    if (proxyConfig && proxyConfig.config && proxyConfig.config.host) {
-        isProxyControlled = true;
-    }
-    console.debug(`chrome.storage: initial proxy configuration ${printProxyConfig(proxyConfig)}`);
-}).catch((err) => {
-    console.warn("chrome.storage: failed to read initial proxy configuration", err);
-});
+if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+    chrome.storage.local.get([KEY_PROXY_CONFIG, "__myst_firefox_proxy_state"]).then((result) => {
+        const rawVal = result && result[KEY_PROXY_CONFIG];
+        proxyConfig = readProxyConfigFromJson(rawVal ? String(rawVal) : null);
+        const storedProxyState = result && result.__myst_firefox_proxy_state;
+        const explicitlyDisconnected =
+            storedProxyState &&
+            typeof storedProxyState === "object" &&
+            storedProxyState.levelOfControl &&
+            storedProxyState.levelOfControl !== "controlled_by_this_extension";
+        if (proxyConfig && proxyConfig.config && proxyConfig.config.host && !explicitlyDisconnected) {
+            isProxyControlled = true;
+        }
+        console.debug(`chrome.storage: initial proxy configuration ${printProxyConfig(proxyConfig)}`);
+    }).catch((err) => {
+        console.warn("chrome.storage: failed to read initial proxy configuration", err);
+    });
+}
 
 function proxyConfigStorageWatcher(changes, _) {
     if (changes.myst_errors) {
@@ -104,7 +156,9 @@ function proxyConfigStorageWatcher(changes, _) {
     triggerAuthListener();
 }
 
-chrome.storage.onChanged.addListener(proxyConfigStorageWatcher);
+if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.onChanged) {
+    chrome.storage.onChanged.addListener(proxyConfigStorageWatcher);
+}
 
 // Firefox native proxy.onRequest handler (works without requiring Private Browsing permission)
 if (typeof browser !== "undefined" && browser.proxy && browser.proxy.onRequest) {
@@ -113,17 +167,17 @@ if (typeof browser !== "undefined" && browser.proxy && browser.proxy.onRequest) 
             if (!isProxyControlled || !proxyConfig || !proxyConfig.config || !proxyConfig.config.host) {
                 return { type: "direct" };
             }
-            try {
-                const reqUrl = new URL(requestDetails.url);
-                if (shouldBypassProxy(reqUrl.hostname)) {
-                    return { type: "direct" };
-                }
-            } catch (_) {}
-
             const { host, port } = parseProxyHostAndPort(proxyConfig.config.host);
             if (!host) {
                 return { type: "direct" };
             }
+            try {
+                const reqUrl = new URL(requestDetails.url);
+                if (shouldBypassProxy(reqUrl.hostname, host)) {
+                    return { type: "direct" };
+                }
+            } catch (_) {}
+
             return {
                 type: "https",
                 host,
@@ -136,7 +190,7 @@ if (typeof browser !== "undefined" && browser.proxy && browser.proxy.onRequest) 
 
 function proxyAuthenticationProvider(details, callback) {
     console.debug("chrome.webRequest.onAuthRequired: callback", JSON.stringify(details));
-    if (details.isProxy === true && isProxyControlled && proxyConfig && proxyConfig.config != null) {
+    if (details && details.isProxy === true && isProxyControlled && proxyConfig && proxyConfig.config != null) {
         console.debug(`chrome.webRequest.onAuthRequired: providing proxy authentication: ${printProxyConfig(proxyConfig)}`);
         const authCredentials = {
             username: proxyConfig.username,
@@ -157,33 +211,54 @@ function proxyAuthenticationProvider(details, callback) {
     }
 }
 
-if (chrome.webRequest.onAuthRequired.hasListener(proxyAuthenticationProvider)) {
-    console.debug("chrome.webRequest.onAuthRequired: removing existing listener");
-    chrome.webRequest.onAuthRequired.removeListener(proxyAuthenticationProvider);
+if (typeof chrome !== "undefined" && chrome.webRequest && chrome.webRequest.onAuthRequired) {
+    if (chrome.webRequest.onAuthRequired.hasListener(proxyAuthenticationProvider)) {
+        console.debug("chrome.webRequest.onAuthRequired: removing existing listener");
+        chrome.webRequest.onAuthRequired.removeListener(proxyAuthenticationProvider);
+    }
+    console.debug("chrome.webRequest.onAuthRequired: adding listener");
+    chrome.webRequest.onAuthRequired.addListener(proxyAuthenticationProvider, { urls: ["<all_urls>"] }, ["asyncBlocking"]);
 }
-console.debug("chrome.webRequest.onAuthRequired: adding listener");
-chrome.webRequest.onAuthRequired.addListener(proxyAuthenticationProvider, { urls: ["<all_urls>"] }, ["asyncBlocking"]);
 
 function iconUpdater(details) {
     if (details && details.levelOfControl === "controlled_by_this_extension") {
         isProxyControlled = true;
-        chrome.action.setIcon({ path: "/icons/connected-48.png" });
+        if (typeof chrome !== "undefined" && chrome.action && chrome.action.setIcon) {
+            chrome.action.setIcon({ path: "/icons/connected-48.png" });
+        }
     } else {
         isProxyControlled = false;
-        chrome.action.setIcon({ path: "/icons/default-48.png" });
+        if (typeof chrome !== "undefined" && chrome.action && chrome.action.setIcon) {
+            chrome.action.setIcon({ path: "/icons/default-48.png" });
+        }
     }
 }
 
-chrome.proxy.settings.onChange.addListener(iconUpdater);
-chrome.proxy.settings.get({}, iconUpdater);
+if (typeof chrome !== "undefined" && chrome.proxy && chrome.proxy.settings) {
+    chrome.proxy.settings.onChange.addListener(iconUpdater);
+    chrome.proxy.settings.get({}, iconUpdater);
+}
 
 // Hack: triggers onAuthRequired listener.
 // Without it, location update upon connecting within the extension popup won't work.
 async function triggerAuthListener() {
+    if (typeof fetch !== "function") return;
     return fetch(PING_URL)
         .then(res => console.debug(`Ping ${PING_URL}: ok ${res.status}`))
         .catch(err => console.debug(`Ping ${PING_URL} failed:`, err && err.message));
 }
 
 // Also do it on startup (fix broken connection if proxy had been activated in the previous browser session)
-triggerAuthListener();
+if (typeof chrome !== "undefined" && chrome.storage) {
+    triggerAuthListener();
+}
+
+if (typeof module !== "undefined" && module.exports) {
+    module.exports = {
+        readProxyConfigFromJson,
+        parseProxyHostAndPort,
+        shouldBypassProxy,
+        printProxyConfig,
+        proxyAuthenticationProvider
+    };
+}

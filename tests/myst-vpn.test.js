@@ -215,4 +215,11 @@ describe('myst-vpn-firefox-port polyfill & onRequest integration', () => {
     await context.chrome.proxy.settings.clear({});
     assert.deepEqual(fromVm(onRequestListeners[0]({ url: 'https://example.com/' })), { type: 'direct' });
   });
+
+  it('loads firefox-polyfill.js before background.js in manifest.json', () => {
+    const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'manifest.json'), 'utf8'));
+    const scripts = manifest.background?.scripts || [];
+    assert.ok(scripts.indexOf('firefox-polyfill.js') >= 0);
+    assert.ok(scripts.indexOf('background.js') > scripts.indexOf('firefox-polyfill.js'));
+  });
 });
